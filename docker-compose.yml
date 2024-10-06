@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: . 
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3002"
+    healthcheck:  # Add a health check to wait until the server is ready
+      test: ["CMD-SHELL", "curl -f http://localhost:3002 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  
+  client:
+    build:
+      context: .
+      dockerfile: DockerfileClient
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "3003:3003"
+
+  secondclient:
+    build:
+      context: .
+      dockerfile: DockerfileSecondclient
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "3005:3005"
