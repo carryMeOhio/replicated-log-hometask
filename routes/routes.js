@@ -19,20 +19,31 @@ router.get("/", (request, response) => {
     });
 });
 
-router.post('/message', (request, response) => {
+router.post('/message', async (request, response) => {
     var messageId = Date.now();
+    
     messageMap.set(messageId, request.body.message);
     console.log('Message added to server:', messageMap);
 
     // Broadcast the new message to WebSocket clients
-    const messageData = { id: messageId, message: request.body.message };
-    wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(messageData));
-            console.log("Message " + messageData.id + " added for client ");
-        }
-    });
-
+    const broadcastPromises = Array.from(wss.clients).map(client => {
+        return new Promise((resolve, reject) => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ id: messageId, message: request.body.message }), (error) => {
+                    if (error) {
+                        console.error("Error sending message to client:", error);
+                        reject(error);
+                    } else {
+                        console.log(`Broadcasted message "${request.body.message}" to client`);
+                        resolve();
+                    }
+                });
+            } else {
+                resolve();
+            }
+        });
+    });    
+    await Promise.all(broadcastPromises);        
     response.status(201).send(`Message added with ID: ${messageId}`);
 });
 
