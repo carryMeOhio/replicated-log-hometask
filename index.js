@@ -33,6 +33,30 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
       console.log('Client disconnected');
     });
+
+    ws.on('message', (data) => {
+      const messageData = JSON.parse(data);
+  
+      if (messageData.action === 'RETRANSMIT' && messageData.sequence) {
+        console.log(`Starting retransmission`);
+        const missingMessage = Array.from(messageMap.keys()).find(
+          (msg) => msg === messageData.sequence
+        );
+  
+        console.log('missing message map key: ' + missingMessage)
+
+        if (missingMessage) {
+          ws.send(JSON.stringify({
+            id: messageMap.get(missingMessage).id,
+            message: messageMap.get(missingMessage).message,
+            sequence: missingMessage,
+          }));
+          console.log(`Retransmitted message with sequence: ${missingMessage}`);
+        } else {
+          console.warn(`No message found for sequence: ${missingMessage}`);
+        }
+      }
+    });
 });
 
 // Start the server 

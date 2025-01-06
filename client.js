@@ -9,25 +9,96 @@ const app = express();
 const clientMessageMap = new Map();
 // Track processed message IDs for deduplication
 const processedMessages = new Set();
+// Buffer for out-of-order messages
+const messageBuffer = new Map();
+ // Track the next expected sequence 
+let nextExpectedSequence = 1;
+// Failure rate for simulating errors
+const FAILURE_RATE = 0.3;
+// Interval for messages retrying
+const RETRY_INTERVAL = 5000;
+let retryTimeout = null;
+// Check whether message is retransmitted
+const retransmissionStatus = new Set();
+
 
 // Connect to the WebSocket server on the main server
 const ws = new WebSocket('ws://server:3002');
 
-// Listen for WebSocket messages and update the client's message map
-ws.on('message', (data) => {
-  // additional data validation
-  let parsedData;
-  try {
-      parsedData = JSON.parse(data);
-  } catch (error) {
-      console.error(`Client 1: Error parsing incoming message`, error);
-      return;
+// Function to process a message
+const processMessage = (messageData, webS) => {
+  console.log(`Processing message with ID: ${messageData.id}, sequence: ${messageData.sequence}`);
+
+  // Add the message to the client's map using ID as the key
+  clientMessageMap.set(messageData.id, messageData.message);
+
+  // Mark the message as processed
+  processedMessages.add(messageData.id);
+
+  // Send ACK back to the server with the sequence number
+  const ack = { status: 'ACK', id: messageData.id, sequence: messageData.sequence };
+  webS.send(JSON.stringify(ack));
+  console.log(`Acknowledgment sent for message ID: ${messageData.id}, sequence: ${messageData.sequence}`);
+
+  // Clear retry timeout if this is the missing sequence
+  if (messageData.sequence === nextExpectedSequence && retryTimeout) {
+    clearTimeout(retryTimeout);
+    retryTimeout = null;
+    console.log(`Retry cleared for sequence: ${nextExpectedSequence}`);
+  }
+};
+
+// Function to process buffered messages
+const processBufferedMessages = (webS) => {
+  while (messageBuffer.has(nextExpectedSequence)) {
+    const messageData = messageBuffer.get(nextExpectedSequence);
+    messageBuffer.delete(nextExpectedSequence);
+    processMessage(messageData, webS);
+    nextExpectedSequence++;
   }
 
+  // If all buffered messages are processed, clear the retry timeout
+  if (!messageBuffer.size && retryTimeout) {
+    clearTimeout(retryTimeout);
+    retryTimeout = null;
+  }
+};
+
+// Function to request retransmission of missing messages
+const requestRetransmission = () => {
+  if (retryTimeout) {
+    console.warn(`Retry already scheduled for sequence: ${nextExpectedSequence}`);
+    return;
+  }
+
+  console.warn(`Requesting retransmission for missing sequence: ${nextExpectedSequence}`);
+  const retransmitRequest = { action: "RETRANSMIT", sequence: nextExpectedSequence };
+  ws.send(JSON.stringify(retransmitRequest));
+  retransmissionStatus.add(nextExpectedSequence);
+
+  retryTimeout = setTimeout(() => {
+    retryTimeout = null;
+    if (!processedMessages.has(nextExpectedSequence)) {
+      console.warn(`Still missing sequence: ${nextExpectedSequence}. Retrying.`);
+      requestRetransmission();
+    }
+  }, RETRY_INTERVAL);
+};
+
+// WebSocket message handler
+ws.on('message', (data) => {
   const messageData = JSON.parse(data);
 
-  if (!messageData.id) {
-    console.error(`Client 1: Received message with undefined ID`);
+  if (!messageData.id || !messageData.sequence || !messageData.message) {
+    console.error(`Client: Received malformed or incomplete message`, messageData);
+    return;
+  }
+
+  console.log(`Client: Received message`, messageData);
+
+  // Simulate random failure only for initial (non-retransmitted) messages
+  if (!retransmissionStatus.has(messageData.sequence) && Math.random() < FAILURE_RATE) {
+    console.error(`Simulating internal error for message ID: ${messageData.id}, sequence: ${messageData.sequence}`);
     return;
   }
 
@@ -37,30 +108,18 @@ ws.on('message', (data) => {
     return;
   }
 
-  // If data is an array, it's the full message map; otherwise, it's a new message
-  if (Array.isArray(messageData)) {
-    // Sync the client's map with the server's
-    messageData.forEach(([id, message]) => {
-      clientMessageMap.set(id, message);
-    });
+  // Process message or buffer it based on sequence
+  if (messageData.sequence === nextExpectedSequence) {
+    processMessage(messageData, ws);
+    nextExpectedSequence++;
+    processBufferedMessages(ws);
+  } else if (messageData.sequence > nextExpectedSequence) {
+    console.log(`Out-of-order message received. Buffering message with sequence: ${messageData.sequence}`);
+    messageBuffer.set(messageData.sequence, messageData);
+    requestRetransmission();
   } else {
-    // Add the new message to the client's map
-    clientMessageMap.set(messageData.id, messageData.message);
+    console.log(`Old message received and ignored. Sequence: ${messageData.sequence}`);
   }
-
-  // Simulate some delay in processing
-  const delay = Math.random() * 10000 + 5000;
-  setTimeout(() => {
-      console.log(`Client 1 stored message with ID: ${messageData.id}`);
-      // Mark the message as processed
-      processedMessages.add(messageData.id);
-      // Send ACK back to the server
-      const ack = { status: 'ACK', id: messageData.id };
-      ws.send(JSON.stringify(ack));
-      console.log(`Acknowledgment sent from client 1 for message ID: ${messageData.id}`);
-  }, delay);
-
-  console.log('Client 1 message map updated:', clientMessageMap);
 });
 
 // Get the replicated messages
