@@ -7,6 +7,8 @@ const app = express();
 
 // Create a map to store the replicated messages
 const clientMessageMap = new Map();
+// Track processed message IDs for deduplication
+const processedMessages = new Set();
 
 // Connect to the WebSocket server on the main server
 const ws = new WebSocket('ws://server:3002');
@@ -27,7 +29,13 @@ ws.on('message', (data) => {
   if (!messageData.id) {
     console.error(`Client 1: Received message with undefined ID`);
     return;
-}
+  }
+
+  // Check if the message has already been processed
+  if (processedMessages.has(messageData.id)) {
+    console.log(`Client: Duplicate message with ID ${messageData.id} ignored`);
+    return;
+  }
 
   // If data is an array, it's the full message map; otherwise, it's a new message
   if (Array.isArray(messageData)) {
@@ -41,9 +49,11 @@ ws.on('message', (data) => {
   }
 
   // Simulate some delay in processing
-  const delay = Math.random() * 10000 + 5000; // Random delay between 5000ms and 15000ms
+  const delay = Math.random() * 10000 + 5000;
   setTimeout(() => {
       console.log(`Client 1 stored message with ID: ${messageData.id}`);
+      // Mark the message as processed
+      processedMessages.add(messageData.id);
       // Send ACK back to the server
       const ack = { status: 'ACK', id: messageData.id };
       ws.send(JSON.stringify(ack));
@@ -53,7 +63,7 @@ ws.on('message', (data) => {
   console.log('Client 1 message map updated:', clientMessageMap);
 });
 
-// get the replicated messages
+// Get the replicated messages
 app.get('/replicated-messages', (req, res) => {
   res.json(Array.from(clientMessageMap.entries()));
 });
